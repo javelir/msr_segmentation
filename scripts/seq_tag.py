@@ -20,20 +20,13 @@ class TrainingParms(object):
     nepoch_no_improve = 10
     dropout = 0.5
     model_path = './model/'
+    vocab_size = 0
+    num_targets = 0
 
-    # def __init__(self, vocab_size, num_targets=4):
-    def __init__(self, vocab_size, num_targets=5):
-        self._vocab_size = vocab_size
-        self._num_targets = num_targets
-
-    @property
-    def vocab_size(self):
-        return self._vocab_size
-
-    @property
-    def num_targets(self):
-        return self._num_targets
-
+    def __init__(self, **kwargs):
+        for key, val in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, val)
 
 class ChineseSegmentationModel(object):
     """ x """
@@ -79,6 +72,7 @@ class ChineseSegmentationModel(object):
             shape=[],
             name='learning_rate',
         )
+        print("Placeholders built")
 
     def build_embeddings(self):
         """ x """
@@ -92,6 +86,7 @@ class ChineseSegmentationModel(object):
             ids=self.source_ids,
             name='char_embeddings',
         )
+        print("Embeddings built")
 
     def build_forward_op(self):
         """ x """
@@ -137,30 +132,38 @@ class ChineseSegmentationModel(object):
             tensor=yhat,
             shape=[-1, nsteps, self.parms.num_targets],
         )
-        self.labels_pred = tf.cast(
-            x=tf.argmax(
-                self.logits, axis=-1
-            ),
-            dtype=tf.int32,
-        )
+        #self.labels_pred = tf.cast(
+        #    x=tf.argmax(
+        #        self.logits, axis=-1
+        #    ),
+        #    dtype=tf.int32,
+        #)
+        print("Forward loop built")
 
     def build_loss(self):
         """ x """
-        losses = tf.nn.sparse_softmax_cross_entropy_with_logits(
-            labels=self.target_ids,
-            logits=self.logits,
-        )
-        mask = tf.sequence_mask(self.sequence_lengths)
-        losses = tf.boolean_mask(losses, mask)
-        self.loss = tf.reduce_mean(losses)
+        #losses = tf.nn.sparse_softmax_cross_entropy_with_logits(
+        #    labels=self.target_ids,
+        #    logits=self.logits,
+        #)
+        log_likelihood, self.transition_params = tf.contrib.crf.crf_log_likelihood(
+            self.logits, self.target_ids, self.sequence_lengths)
+        self.labels_pred, viterbi_score = tf.contrib.crf.crf_decode(
+            self.logits, self.transition_params, self.sequence_lengths)
+        #mask = tf.sequence_mask(self.sequence_lengths)
+        #losses = tf.boolean_mask(losses, mask)
+        #self.loss = tf.reduce_mean(losses)
+        self.loss = tf.reduce_mean(-log_likelihood)
 
         # for tensorboard
         tf.summary.scalar('loss', self.loss)
+        print("Loss calculation built")
 
     def build_optimizer(self):
         """ x """
-        optimizer = tf.train.GradientDescentOptimizer(self.lr)
-        _grads, _vars = zip(*optimizer.compute_gradients(self.loss))
+        #optimizer = tf.train.GradientDescentOptimizer(self.lr)
+        optimizer = tf.train.AdamOptimizer(self.lr)
+        #_grads, _vars = zip(*optimizer.compute_gradients(self.loss))
         # grads, gnorm = tf.clip_by_global_norm(
         #     t_list=_grads,
         #     clip_norm=self.parms.clip,
@@ -170,6 +173,7 @@ class ChineseSegmentationModel(object):
         # )
         # self.train_op = optimizer.apply_gradients(zip(grads, _vars))
         self.train_op = optimizer.minimize(self.loss)
+        print("Optimizer built")
 
     def init_session(self):
         """ x """
@@ -177,6 +181,7 @@ class ChineseSegmentationModel(object):
         self.sess.run(
             tf.global_variables_initializer()
         )
+        print("Init session finished")
 
     def train(self):
         """ x """
@@ -232,7 +237,16 @@ class ChineseSegmentationModel(object):
     def predict(self, sent):
         """ x """
         ids = self.data_generator.words_to_ids(words=sent)
+        print(f"sent={sent}, ids={ids}")
         seqlength = np.array([len(ids)])
+        #labels_pred = self.sess.run(
+        #    fetches=self.labels_pred,
+        #    feed_dict={
+        #        self.source_ids:np.array([ids]),
+        #        self.sequence_lengths:seqlength,
+        #        self.dropout:0.5
+        #    }
+        #)
         labels_pred = self.sess.run(
             fetches=self.labels_pred,
             feed_dict={
@@ -241,6 +255,7 @@ class ChineseSegmentationModel(object):
                 self.dropout:0.5
             }
         )
+        print(f"labels_pred={labels_pred}")
         targets = self.data_generator.ids_to_targets(ids=labels_pred[0])
         return targets
 
@@ -248,13 +263,15 @@ class ChineseSegmentationModel(object):
 
 def test_project(_):
     from data_iterator import AnnotatedData
-    from config import Config
+    from config import BasicConfig
     # data_generator = AnnotatedData(path=Config.test_utf8, limit=100)
-    data_generator = AnnotatedData(path=Config.pku_utf8, limit=10000)
-    parms = TrainingParms(vocab_size=data_generator.vocab_size)
+    data_generator = AnnotatedData(path=BasicConfig.msr_utf8, limit=1000)
+    data_generator.save("../data/")
+    parms = TrainingParms(vocab_size=data_generator.vocab_size, num_targets=data_generator.target_size)
+    print(parms.vocab_size, parms.num_targets)
     parms.lr = parms.lr
     parms.lr_decay = 0.999
-    parms.nbatches = 1000
+    parms.nbatches = 100
     parms.batch_size = 128
     parms.burn_out = 300
     model = ChineseSegmentationModel(parms=parms, data_generator=data_generator)
@@ -263,11 +280,13 @@ def test_project(_):
     model.train()
     target_sents = [
         #"今天的天气真的好棒呀！",
+        "这首先是个民族问题，民族的感情问题。",
         "我们相信通过这些国家和地区的努力以及有关的国际合作，情况会逐步得到缓解。",
         "继续把建设有中国特色社会主义事业推向前进。"
     ]
     for target_sent in target_sents:
-        for x, y in zip(target_sent, model.predict(target_sent)):
+        predictions = model.predict(target_sent)
+        for x, y in zip(target_sent, predictions):
             print(x, y)
 
 

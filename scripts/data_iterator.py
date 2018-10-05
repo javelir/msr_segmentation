@@ -28,10 +28,9 @@ class AnnotatedData(object):
         reverse_target_dictionary: number-word dictionary
         pad_id: id(number) for padding unit
     """
-    pad_id = 0
     unk = "__unk__"
     rgx_non_ch = re.compile("^[-0-9a-zA-Z\\.]+$")
-    def __init__(self, path=None, sep=' ', encoding='utf-8', limit=None, min_count=5):
+    def __init__(self, path=None, sep='  ', encoding='utf-8', limit=None, min_count=5):
         """
          Load data into memory and keep given number of lines if limit given,
          build dictionary and reverse dictionary for taggs, build dataset
@@ -53,6 +52,14 @@ class AnnotatedData(object):
         if path:
             self.load_from_path(path=path, limit=limit, encoding=encoding, min_count=min_count)
 
+    @property
+    def target_size(self):
+        return len(self.target_dictionary)
+
+    @property
+    def vocab_size(self):
+        return len(self.letter_dictionary)
+
     def load_from_path(self, path, limit, encoding, min_count):
         with open(path, mode='r', encoding=encoding) as instream:
             raw = instream.read().splitlines()
@@ -61,10 +68,11 @@ class AnnotatedData(object):
         self.source_len = len(raw)
         self._remaining_indexes = list(range(self.source_len))
         shuffle(self._remaining_indexes)
-        self.target_dictionary = {key:val for val, key in enumerate('bmes', start=1)}
-        self.target_dictionary["padding"] = 0
-        # self.target_dictionary = {key:val for val, key in enumerate('bmes', start=0)}
-        self.reverse_target_dictioanry = {val:key for key, val in self.target_dictionary.items()}
+        #self.target_dictionary = {key:val for val, key in enumerate('bmes', start=1)}
+        #self.target_dictionary["padding"] = 0
+        self.target_dictionary = {key:val for val, key in enumerate('bmes', start=0)}
+        self.pad_id = 3
+        self.reverse_target_dictionary = {val:key for key, val in self.target_dictionary.items()}
         self.build_dataset(inputs=raw, min_count=min_count)
 
     @classmethod
@@ -162,8 +170,9 @@ class AnnotatedData(object):
                 self.logger.info(f"Finish processing {line_idx} lines")
 
         self.logger.info(f"Number of raw input characters={len(letter_dic)}")
-        revordered_dic = sorted(letter_dic.items(), key=lambda x:x[1], reverse=True)
-        letter_dictionary = {key:idx for idx, (key, _) in enumerate(revordered_dic, start=1) if idx >= min_count}
+        censored_dic = {key:cnt for key, cnt in letter_dic.items() if cnt >= min_count}
+        revordered_dic = sorted(censored_dic.items(), key=lambda x:x[1], reverse=True)
+        letter_dictionary = {key:idx for idx, (key, _) in enumerate(revordered_dic, start=1)}
         letter_dictionary[self.unk] = 0
         self.raw_sources = raw_sources
         self.raw_targets = raw_targets
@@ -180,7 +189,7 @@ class AnnotatedData(object):
         self.reverse_target_dictionary = {val:key for key,val in self.target_dictionary.items()}
         self.logger.info(f"Training dataset build: {self.source_len} observations with vocab size={len(self.letter_dictionary)}.")
         self.lengths = lengths
-        self.vocab_size = len(self.reverse_words_dictionary)
+        #self.vocab_size = len(self.reverse_words_dictionary)
         
     def get_batch(self, size):
         """ Generate a batch of training sets without padding """
@@ -220,7 +229,7 @@ class AnnotatedData(object):
 
     def words_to_ids(self, words):
         """ x """
-        return np.array([self.letter_dictionary.get(word) for word in words])
+        return np.array([self.letter_dictionary.get(word, self.letter_dictionary[self.unk]) for word in words])
 
     def ids_to_words(self, ids):
         """ Convert source ids to words """
